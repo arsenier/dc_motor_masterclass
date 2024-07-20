@@ -132,50 +132,7 @@ ISR(PCINT2_vect) // Port D, PCINT16 - PCINT23
 }
 ```
 
-<details>
-  <summary>Чуть более подробное и общее описание процесса</summary>
-
-> Оригинальный урок: https://thewanderingengineer.com/2014/08/11/arduino-pin-change-interrupts/
->
-> Ниже представлен его перевод
-
-##### 1. Включение прерываний
-
-Для включения PCINT необходимо выставить определенные биты в регистре PCICR (Pin Chane Interrupt Control Register). Бит 0 включает PCINT на порту B (PCINT0-PCINT7), бит 1 включает на порту C (PCINT8-PCINT14), и бит 2 включает на порту D (PCINT16-PCINT23). Код ниже показывает как можно включить некоторые комбинации. Обратите внимание, используется не присвоение `'='`, а побитовое ИЛИ: `'|='`, т.к. мы как правило не хотим перезаписывать все биты, однако в нашем случае можно использовать и то и то. Кроме двоичного представления чисел можно также использовать шестнадцатиричное или десятичное. Однако в данном случае двоичное воспринимать проще.
-
-```C++
-PCICR |= 0b00000001;    // Включить на порту B
-PCICR |= 0b00000010;    // Включить на порту C
-PCICR |= 0b00000100;    // Включить на порту D
-PCICR |= 0b00000111;    // Включить на всех портах
-```
-![alt text](image-2.png)
-
-##### 2. Выбираем нужные пины
-
-Помимо включения прерываний для целого порта, необходимо также включить нужные пины внутри этого порта. Для этого используется несколько специальных регистров-масок. Так как на Atmega328 портов всего три, регистров-масок тоже три: PCMSK0, PCMSK1 и PCMSK2. Их можно модифицировать также как мы модифицировали регистр PCICR. Можно использовать и `'='` и `'|='`, однако последний вариант позволяет разделить выставление битов на несколько строчек без перезатирания уже выставленных битов.
-
-![alt text](image-5.png)
-![alt text](image-4.png)
-![alt text](image-6.png)
-
-```C++
-PCMSK0 |= 0b00000001; // Включить пин PB0 (PCINT0), пин 8 на Arduino
-PCMSK1 |= 0b00010000; // Включить пин PC4 (PCINT12), пин A4 на Arduino
-PCMSK2 |= 0b10000001; // Включить пины PD0 и PD7 (PCINT16 и PCINT23), пины 0 и 7 на Arduino
-```
-
-##### 3. Пишем обработчик прерывания ISR
-
-Последним шагом будет написание функции-обработчика, которая будет вызываться при срабатывании прерывания. Для объявления функции их следует объявить так:
-
-```c++
-ISR(PCINT0_vect){}    // Port B, PCINT0 - PCINT7
-ISR(PCINT1_vect){}    // Port C, PCINT8 - PCINT14
-ISR(PCINT2_vect){}    // Port D, PCINT16 - PCINT23
-```
-  
-</details>
+Более подробно про их использование можно прочитать [здесь на русском](https://arsenier.github.io/pin_change_interrupts/PCINT.html), или [здесь на английском](https://thewanderingengineer.com/2014/08/11/arduino-pin-change-interrupts/).
 
 #### Обработчик прерывания
 
@@ -206,6 +163,7 @@ void encoder_init()
 
     // https://thewanderingengineer.com/2014/08/11/arduino-pin-change-interrupts/
     // Настройка прерываний энкодера
+    noInterrupts(); // Временное отключение прерываний
     PCICR |= 0b00000100; // turn on port D change interrupts
     PCMSK2 |= 0b00001100; // turn on pins PD2 & PD3 (D2 and D3)
 
@@ -220,9 +178,11 @@ void encoder_init()
     ett[0b11][0b10] = -ENC_DIR;
     ett[0b10][0b00] = -ENC_DIR;
 
-    // Расчет коэффициента пересчета
-    tick_to_rad = 2.0 * M_PI / (ENC_PPR * i);
+  // Расчет коэффициента пересчета
+  tick_to_rad = 2.0 * M_PI / (ENC_PPR * GEAR_RATIO);
 
+  // Включение прерываний
+  interrupts();
 }
 ```
 
@@ -233,6 +193,13 @@ ISR(PCINT2_vect) // Port D, PCINT16 - PCINT23
 {
     static uint8_t enc_zn1 = 0;
     const uint8_t enc = (ENC_PORT & ENC_MASK) >> ENC_SHIFT;
+
+    //       xxxxABxx
+    //     & 00001100
+    //       0000AB00
+    //    >>2
+    // enc = 000000AB
+    
     counter += ett[enc_zn1][enc];
     enc_zn1 = enc;
 }
@@ -309,8 +276,12 @@ float velocity_estimator(float pos)
     const float delta_pos = pos - pos_old;
     const float inst_vel = delta_pos / Ts_s;
 
-    const float filtering = 0.1;
+    const float filtering = 0.3;
     vel = (1.0 - filtering) * inst_vel + filtering * vel;
+    
+    pos_old = pos;
+
+    return vel;
 }
 ```
 
@@ -319,10 +290,10 @@ float velocity_estimator(float pos)
 ```c++
 float vel_pi_reg(float err, float max_output)
 {
-    const float K = 1;
-    const float T = 0.3;
-    const float Kp = K_xi;
-    const float Ki = K_xi / T_xi;
+    const float K = 3;
+    const float T = 0.01;
+    const float Kp = K;
+    const float Ki = K / T;
 
     const float p = err * Kp;
     static float I = 0;
@@ -373,5 +344,204 @@ void loop()
   ///////// ACT /////////
   motor_tick(u);
   ...
+}
+```
+
+## Приложение
+
+Полный код программы управления:
+
+```c++
+// motor_control.ino
+#include "encoder.h"
+#include "motor.h"
+
+#define Ts_us 5000 // Период квантования в [мкс]
+#define Ts_s (Ts_us / 1000000.0) // Период квантования в [с]
+
+void setup()
+{
+  Serial.begin(115200);
+  encoder_init();
+  motor_init();
+  
+  pinMode(A1, INPUT);
+}
+
+void loop()
+{
+  ///////// TIMER /////////
+  // Задание постоянной частоты главного цикла прогааммы
+  static uint32_t timer = micros();
+  while(micros() - timer < Ts_us)
+    ;
+  timer = micros();
+
+  ///////// SENSE /////////
+  // Считывание датчиков
+
+  const float pos0 = (analogRead(A1) - 512) / 50.0;
+  
+  encoder_tick();
+
+  ///////// PLAN /////////
+  // Расчет управляющих воздействий
+
+  const float Kp_phi = 30;
+  const float vel0 = (pos0 - phi)*Kp_phi;
+
+  const float vel = velocity_estimator(phi);
+  
+  const float err = vel0 - vel;
+  const float u = vel_pi_reg(err, SUPPLY_VOLTAGE);
+
+  ///////// ACT /////////
+  // Приведение управляющих воздействий в действие и логирование данных
+  motor_tick(u);
+
+  Serial.print(" pos0: " );
+  Serial.print(pos0);
+  Serial.print(" phi: " );
+  Serial.print(phi);
+  Serial.println();
+}
+
+float velocity_estimator(float pos)
+{
+    static float pos_old = pos;
+    static float vel = 0;
+
+    const float delta_pos = pos - pos_old;
+    const float inst_vel = delta_pos / Ts_s;
+
+    const float filtering = 0.3;
+    vel = (1.0 - filtering) * inst_vel + filtering * vel;
+    
+    pos_old = pos;
+
+    return vel;
+}
+
+float vel_pi_reg(float err, float max_output)
+{
+    const float K = 3;
+    const float T = 0.01;
+    const float Kp = K;
+    const float Ki = K / T;
+
+    const float p = err * Kp;
+    static float I = 0;
+    const float i = I * Ki;
+    const float u = p + i;
+    
+    if (u == constrain(u, -max_output, max_output) || (err * u) < 0)
+        I += err * Ts_s;
+
+    return u;
+}
+```
+
+```c++
+// encoder.h
+#pragma once
+
+#define ENC_PIN_A 2
+#define ENC_PIN_B 3
+
+#define ENC_PORT PIND
+#define ENC_MASK 0b00001100
+#define ENC_SHIFT 2
+
+#define ENC_DIR 1
+#define ENC_PPR 48
+#define GEAR_RATIO 47
+
+volatile int counter = 0;
+float phi = 0;
+float tick_to_rad = 0;
+int8_t ett[4][4] = {0};
+
+void encoder_init()
+{
+  // Инициализация пинов энкодера
+  pinMode(ENC_PIN_A, INPUT);
+  pinMode(ENC_PIN_B, INPUT);
+
+  // Настройка прерываний энкодера
+  PCICR |= 0b00000100;
+  PCMSK2 |= 0b00001100;
+
+  // Настройка таблицы переходов
+  ett[0b00][0b10] = ENC_DIR;
+  ett[0b10][0b11] = ENC_DIR;
+  ett[0b11][0b01] = ENC_DIR;
+  ett[0b01][0b00] = ENC_DIR;
+
+  ett[0b00][0b01] = -ENC_DIR;
+  ett[0b01][0b11] = -ENC_DIR;
+  ett[0b11][0b10] = -ENC_DIR;
+  ett[0b10][0b00] = -ENC_DIR;
+
+  // Расчет коэффициента пересчета
+  tick_to_rad = 2.0 * M_PI / (ENC_PPR * GEAR_RATIO);
+
+  interrupts();
+}
+
+ISR(PCINT2_vect) // Port D, PCINT16 - PCINT23
+{
+    static uint8_t enc_zn1 = 0;
+    const uint8_t enc = (ENC_PORT & ENC_MASK) >> ENC_SHIFT;
+
+    //   xxxxABxx
+    // & 00001100
+    //   0000AB00
+    //>>2
+    //   000000AB
+    
+    counter += ett[enc_zn1][enc];
+    enc_zn1 = enc;
+}
+
+void encoder_tick()
+{
+    noInterrupts();
+    const int16_t counter_inc = counter;
+    counter = 0;
+    interrupts();
+
+    phi += counter_inc * tick_to_rad;
+}
+```
+
+```c++
+// motor.h
+#pragma once
+
+#define MOTOR_IN 10
+#define MOTOR_PWM 11
+#define MOTOR_DIR 1
+#define SUPPLY_VOLTAGE 12
+
+void motor_init()
+{
+  pinMode(MOTOR_IN, OUTPUT);
+  pinMode(MOTOR_PWM, OUTPUT);
+}
+
+void motor_tick(float u)
+{
+  const int16_t pwm = 255.0 * constrain(u / SUPPLY_VOLTAGE, -1.0, 1.0) * MOTOR_DIR;
+
+  if (pwm >= 0)
+  {
+    digitalWrite(MOTOR_IN, LOW);
+    analogWrite(MOTOR_PWM, pwm);
+  }
+  else
+  {
+    digitalWrite(MOTOR_IN, HIGH);
+    analogWrite(MOTOR_PWM, 255 + pwm);
+  }
 }
 ```
